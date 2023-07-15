@@ -1,5 +1,4 @@
-{"time":"2023-07-15T19:57:32.689560245+01:00","level":"INFO","msg":"recevied initialize method","params":{"clientInfo":{"name":"Neovim","version":"0.8.3"},"capabilities":{}}}
-{"time":"2023-07-15T19:57:32.697248948+01:00","level":"INFO","msg":"received initialized notification","params":{}}
-{"time":"2023-07-15T19:57:35.554604746+01:00","level":"WARN","msg":"notification not handled","id":null,"method":"textDocument/didSave"}
-{"time":"2023-07-15T19:57:37.722409852+01:00","level":"WARN","msg":"notification not handled","id":null,"method":"textDocument/didSave"}
-{"time":"2023-07-15T19:57:37.722410274+01:00","level":"ERROR","msg":"method not found","id":2,"method":"shutdown"}
+{"time":"2023-07-15T20:35:36.465400596+01:00","level":"INFO","msg":"recevied initialize method","params":{"clientInfo":{"name":"Neovim","version":"0.8.3"},"capabilities":{}}}
+{"time":"2023-07-15T20:35:36.472261438+01:00","level":"INFO","msg":"received initialized notification","params":{}}
+{"time":"2023-07-15T20:35:50.353216265+01:00","level":"ERROR","msg":"method not found","id":2,"method":"shutdown"}
+{"time":"2023-07-15T20:35:50.364287413+01:00","level":"ERROR","msg":"processing stopped","error":"EOF"}

@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"time"
 
 	"github.com/a-h/examplelsp/messages"
 	"github.com/a-h/examplelsp/protocol"
@@ -38,6 +40,18 @@ func main() {
 
 	p.SetNotificationHandler("initialized", func(params json.RawMessage) (err error) {
 		log.Info("received initialized notification", slog.Any("params", params))
+		// Start the message pusher.
+		go func() {
+			count := 1
+			for {
+				time.Sleep(time.Second * 1)
+				p.Notify(messages.ShowMessageMethod, messages.ShowMessageParams{
+					Type:    messages.MessageTypeInfo,
+					Message: fmt.Sprintf("Shown %d messages", count),
+				})
+				count++
+			}
+		}()
 		return nil
 	})
 

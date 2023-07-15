@@ -13,36 +13,41 @@ import (
 	"golang.org/x/exp/slog"
 )
 
-type Message struct {
-	// ProtocolVersion is a string specifying the version of the JSON-RPC protocol. MUST be exactly "2.0".
-	ProtocolVersion string `json:"jsonrpc"`
-	// ID is an identifier established by the Client that MUST contain a String, Number, or NULL value if included. If it is not included it is assumed to be a notification. The value SHOULD normally not be Null [1] and Numbers SHOULD NOT contain fractional parts [2]
-	ID *json.RawMessage `json:"id"`
-}
+const protocolVersion = "2.0"
 
-func (msg Message) IsNotification() bool {
-	return msg.ID == nil
+type Message interface {
+	IsJSONRPC()
 }
 
 type Request struct {
-	Message
-	// Method is a string containing the name of the method to be invoked. Method names that begin with the word rpc followed by a period character (U+002E or ASCII 46) are reserved for rpc-internal methods and extensions and MUST NOT be used for anything else.
-	Method string `json:"method"`
-	// Params is a structured value that holds the parameter values to be used during the invocation of the method. This member MAY be omitted.
-	Params json.RawMessage `json:"params"`
+	ProtocolVersion string           `json:"jsonrpc"`
+	ID              *json.RawMessage `json:"id"`
+	Method          string           `json:"method"`
+	Params          json.RawMessage  `json:"params"`
 }
 
-type Response struct {
-	Message
-	// Result is populated on success.
-	// This member is REQUIRED on success.
-	// This member MUST NOT exist if there was an error invoking the method.
-	// The value of this member is determined by the method invoked on the Server.
-	Result any `json:"result"`
-	// Error is populated on failure.
-	// This member is REQUIRED on error.
-	// This member MUST NOT exist if there was no error triggered during invocation.
-	Error *Error `json:"error"`
+func (r Request) IsJSONRPC() {}
+
+func (r Request) IsNotification() bool {
+	return r.ID == nil
+}
+
+func NewResponse(id *json.RawMessage, result any) (resp Response) {
+	return Response{
+		ProtocolVersion: protocolVersion,
+		ID:              id,
+		Result:          result,
+		Error:           nil,
+	}
+}
+
+func NewResponseError(id *json.RawMessage, err error) (resp Response) {
+	return Response{
+		ProtocolVersion: protocolVersion,
+		ID:              id,
+		Result:          nil,
+		Error:           newError(err),
+	}
 }
 
 func newError(err error) *Error {
@@ -59,6 +64,15 @@ func newError(err error) *Error {
 	}
 }
 
+type Response struct {
+	ProtocolVersion string           `json:"jsonrpc"`
+	ID              *json.RawMessage `json:"id"`
+	Result          any              `json:"result"`
+	Error           *Error           `json:"error"`
+}
+
+func (r Response) IsJSONRPC() {}
+
 type Error struct {
 	// Code is a Number that indicates the error type that occurred.
 	Code int64 `json:"code"`
@@ -70,6 +84,14 @@ type Error struct {
 	// The value of this member is defined by the Server (e.g. detailed error information, nested errors etc.).
 	Data any `json:"data"`
 }
+
+type Notification struct {
+	ProtocolVersion string `json:"jsonrpc"`
+	Method          string `json:"method"`
+	Params          any    `json:"params"`
+}
+
+func (n Notification) IsJSONRPC() {}
 
 func (e *Error) Error() string {
 	return e.Message
@@ -100,7 +122,7 @@ func Read(r *bufio.Reader) (req Request, err error) {
 
 var ErrInvalidContentLengthHeader = errors.New("missing or invalid Content-Length header")
 
-func Write(w *bufio.Writer, resp Response) (err error) {
+func Write(w *bufio.Writer, resp Message) (err error) {
 	// Calculate body size.
 	body, err := json.Marshal(resp)
 	if err != nil {
@@ -125,8 +147,8 @@ func New(log *slog.Logger, r io.Reader, w io.Writer) *Transport {
 	return &Transport{
 		r:                    bufio.NewReader(r),
 		concurrencyLimit:     4,
-		methodHandlers:       map[string]Method{},
-		notificationHandlers: map[string]Notification{},
+		methodHandlers:       map[string]MethodHandler{},
+		notificationHandlers: map[string]NotificationHandler{},
 		w:                    bufio.NewWriter(w),
 		writeLock:            &sync.Mutex{},
 		log:                  log,
@@ -139,29 +161,38 @@ func New(log *slog.Logger, r io.Reader, w io.Writer) *Transport {
 type Transport struct {
 	r                    *bufio.Reader
 	concurrencyLimit     int64
-	methodHandlers       map[string]Method
-	notificationHandlers map[string]Notification
+	methodHandlers       map[string]MethodHandler
+	notificationHandlers map[string]NotificationHandler
 	w                    *bufio.Writer
 	writeLock            *sync.Mutex
 	log                  *slog.Logger
 	error                func(err error)
 }
 
-type Method func(params json.RawMessage) (result any, err error)
-type Notification func(params json.RawMessage) (err error)
+type MethodHandler func(params json.RawMessage) (result any, err error)
+type NotificationHandler func(params json.RawMessage) (err error)
 
-func (t *Transport) SetMethodHandler(name string, method Method) {
+func (t *Transport) SetMethodHandler(name string, method MethodHandler) {
 	t.methodHandlers[name] = method
 }
 
-func (t *Transport) SetNotificationHandler(name string, notification Notification) {
+func (t *Transport) SetNotificationHandler(name string, notification NotificationHandler) {
 	t.notificationHandlers[name] = notification
 }
 
-func (t *Transport) Notify(resp Response) (err error) {
+func (t *Transport) Notify(method string, params any) (err error) {
+	n := Notification{
+		ProtocolVersion: protocolVersion,
+		Method:          method,
+		Params:          params,
+	}
+	return t.write(n)
+}
+
+func (t *Transport) write(msg Message) (err error) {
 	t.writeLock.Lock()
 	defer t.writeLock.Unlock()
-	return Write(t.w, resp)
+	return Write(t.w, msg)
 }
 
 func (t *Transport) Process() (err error) {
@@ -198,26 +229,21 @@ func (t *Transport) handleRequest(req Request) {
 	mh, ok := t.methodHandlers[req.Method]
 	if !ok {
 		log.Error("method not found")
-		if err := t.Notify(Response{
-			Message: Message{ProtocolVersion: "2.0", ID: req.ID},
-			Error:   ErrMethodNotFound,
-		}); err != nil {
+		if err := t.write(NewResponseError(req.ID, ErrMethodNotFound)); err != nil {
 			log.Error("failed to respond", slog.Any("error", err))
 			t.error(fmt.Errorf("failed to respond: %w", err))
 		}
 		return
 	}
-	res := Response{
-		Message: Message{ProtocolVersion: "2.0", ID: req.ID},
-	}
+	var res Response
 	result, err := mh(req.Params)
 	if err != nil {
 		log.Error("failed to handle", slog.Any("error", err))
-		res.Error = newError(err)
-		result = nil
+		res = NewResponseError(req.ID, err)
+	} else {
+		res = NewResponse(req.ID, result)
 	}
-	res.Result = result
-	if err = t.Notify(res); err != nil {
+	if err = t.write(res); err != nil {
 		log.Error("failed to respond", slog.Any("error", err))
 		t.error(fmt.Errorf("failed to respond: %w", err))
 	}
