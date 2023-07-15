@@ -1,4 +1,4 @@
-module github.com/a-h/lsp-examples
+module github.com/a-h/examplelsp
 
 go 1.20
 

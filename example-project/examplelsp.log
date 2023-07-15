@@ -1,0 +1,3 @@
+time=2023-07-15T19:45:53.119+01:00 level=INFO msg=initialize params="{ClientInfo:0xc000012108 Capabilities:{}}"
+time=2023-07-15T19:45:53.126+01:00 level=WARN msg="notification not handled" id=<nil> method=initialized
+time=2023-07-15T19:46:11.409+01:00 level=ERROR msg="method not found" id=&[50] method=shutdown

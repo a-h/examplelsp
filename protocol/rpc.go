@@ -121,15 +121,41 @@ func Write(w *bufio.Writer, resp Response) (err error) {
 	return
 }
 
+func New(log *slog.Logger, r io.Reader, w io.Writer) *Transport {
+	return &Transport{
+		r:                    bufio.NewReader(r),
+		concurrencyLimit:     4,
+		methodHandlers:       map[string]Method{},
+		notificationHandlers: map[string]Notification{},
+		w:                    bufio.NewWriter(w),
+		writeLock:            &sync.Mutex{},
+		log:                  log,
+		error: func(err error) {
+			return
+		},
+	}
+}
+
 type Transport struct {
 	r                    *bufio.Reader
 	concurrencyLimit     int64
-	notificationHandlers map[string]NotificationHandler
-	requestHandlers      map[string]RequestHandler
+	methodHandlers       map[string]Method
+	notificationHandlers map[string]Notification
 	w                    *bufio.Writer
 	writeLock            *sync.Mutex
 	log                  *slog.Logger
 	error                func(err error)
+}
+
+type Method func(params json.RawMessage) (result any, err error)
+type Notification func(params json.RawMessage) (err error)
+
+func (t *Transport) SetMethodHandler(name string, method Method) {
+	t.methodHandlers[name] = method
+}
+
+func (t *Transport) SetNotificationHandler(name string, notification Notification) {
+	t.notificationHandlers[name] = notification
 }
 
 func (t *Transport) Notify(resp Response) (err error) {
@@ -138,7 +164,7 @@ func (t *Transport) Notify(resp Response) (err error) {
 	return Write(t.w, resp)
 }
 
-func (t *Transport) Handle() (err error) {
+func (t *Transport) Process() (err error) {
 	sem := make(chan struct{}, t.concurrencyLimit)
 	for {
 		sem <- struct{}{}
@@ -156,20 +182,20 @@ func (t *Transport) Handle() (err error) {
 func (t *Transport) handleRequest(req Request) {
 	log := t.log.With(slog.Any("id", req.ID), slog.String("method", req.Method))
 	if req.IsNotification() {
-		handler, ok := t.notificationHandlers[req.Method]
+		nh, ok := t.notificationHandlers[req.Method]
 		if !ok {
 			log.Warn("notification not handled")
 			return
 		}
 		// We don't need to notify clients if the notification results in an error.
-		if err := handler.Handle(req.Params); err != nil && t.error != nil {
+		if err := nh(req.Params); err != nil && t.error != nil {
 			log.Error("failed to handle notification", slog.Any("error", err))
 			t.error(err)
 		}
 		return
 	}
 	//TODO: Handle batch requests?
-	handler, ok := t.requestHandlers[req.Method]
+	mh, ok := t.methodHandlers[req.Method]
 	if !ok {
 		log.Error("method not found")
 		if err := t.Notify(Response{
@@ -184,7 +210,7 @@ func (t *Transport) handleRequest(req Request) {
 	res := Response{
 		Message: Message{ProtocolVersion: "2.0", ID: req.ID},
 	}
-	result, err := handler.Handle(req.Params)
+	result, err := mh(req.Params)
 	if err != nil {
 		log.Error("failed to handle", slog.Any("error", err))
 		res.Error = newError(err)
@@ -195,14 +221,4 @@ func (t *Transport) handleRequest(req Request) {
 		log.Error("failed to respond", slog.Any("error", err))
 		t.error(fmt.Errorf("failed to respond: %w", err))
 	}
-}
-
-type RequestHandler interface {
-	Method() string
-	Handle(params json.RawMessage) (result any, err error)
-}
-
-type NotificationHandler interface {
-	Method() string
-	Handle(params json.RawMessage) (err error)
 }
