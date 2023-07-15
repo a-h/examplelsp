@@ -16,7 +16,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer lf.Close()
-	log := slog.New(slog.NewTextHandler(lf, nil))
+	log := slog.New(slog.NewJSONHandler(lf, nil))
 
 	p := protocol.New(log, os.Stdin, os.Stdout)
 
@@ -25,7 +25,7 @@ func main() {
 		if err = json.Unmarshal(params, &initializeParams); err != nil {
 			return
 		}
-		log.Info("initialize", slog.Any("params", initializeParams))
+		log.Info("recevied initialize method", slog.Any("params", initializeParams))
 
 		result = messages.InitializeResult{
 			Capabilities: messages.ServerCapabilities{},
@@ -34,6 +34,11 @@ func main() {
 			},
 		}
 		return
+	})
+
+	p.SetNotificationHandler("initialized", func(params json.RawMessage) (err error) {
+		log.Info("received initialized notification", slog.Any("params", params))
+		return nil
 	})
 
 	if err := p.Process(); err != nil {

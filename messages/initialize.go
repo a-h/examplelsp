@@ -2,13 +2,15 @@ package messages
 
 type InitializeParams struct {
 	// Information about the client
-	ClientInfo *struct {
-		Name    string  `json:"name"`
-		Version *string `json:"version"`
-	} `json:"clientInfo"`
+	ClientInfo *ClientInfo `json:"clientInfo"`
 
 	// The capabilities provided by the client (editor or tool)
 	Capabilities ClientCapabilities `json:"capabilities"`
+}
+
+type ClientInfo struct {
+	Name    string  `json:"name"`
+	Version *string `json:"version"`
 }
 
 type ClientCapabilities struct {
