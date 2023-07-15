@@ -22,8 +22,18 @@ type InitializeResult struct {
 	ServerInfo   *ServerInfo        `json:"serverInfo"`
 }
 
+// https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#serverCapabilities
 type ServerCapabilities struct {
+	TextDocumentSync TextDocumentSyncKind `json:"textDocumentSync"`
 }
+
+type TextDocumentSyncKind int
+
+const (
+	TextDocumentSyncKindNone TextDocumentSyncKind = iota
+	TextDocumentSyncKindFull
+	TextDocumentSyncKindIncremental
+)
 
 type ServerInfo struct {
 	Name    string  `json:"name"`

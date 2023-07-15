@@ -20,6 +20,8 @@ func main() {
 	defer lf.Close()
 	log := slog.New(slog.NewJSONHandler(lf, nil))
 
+	uriToContents := map[string]string{}
+
 	p := protocol.New(log, os.Stdin, os.Stdout)
 
 	p.SetMethodHandler("initialize", func(params json.RawMessage) (result any, err error) {
@@ -30,7 +32,9 @@ func main() {
 		log.Info("recevied initialize method", slog.Any("params", initializeParams))
 
 		result = messages.InitializeResult{
-			Capabilities: messages.ServerCapabilities{},
+			Capabilities: messages.ServerCapabilities{
+				TextDocumentSync: messages.TextDocumentSyncKindFull,
+			},
 			ServerInfo: &messages.ServerInfo{
 				Name: "examplelsp",
 			},
@@ -52,6 +56,19 @@ func main() {
 				count++
 			}
 		}()
+		return nil
+	})
+
+	p.SetNotificationHandler(messages.DidOpenTextDocumentNotification, func(params json.RawMessage) (err error) {
+		log.Info("received didOpenTextDocument method", slog.Any("params", params))
+
+		var p messages.DidOpenTextDocumentParams
+		if err = json.Unmarshal(params, &p); err != nil {
+			return
+		}
+		// Store the contents.
+		uriToContents[p.TextDocument.URI] = p.TextDocument.Text
+
 		return nil
 	})
 
