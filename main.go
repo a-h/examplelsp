@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/a-h/examplelsp/messages"
@@ -59,15 +60,33 @@ func main() {
 		return nil
 	})
 
-	p.SetNotificationHandler(messages.DidOpenTextDocumentNotification, func(params json.RawMessage) (err error) {
-		log.Info("received didOpenTextDocument method", slog.Any("params", params))
+	p.SetNotificationHandler(messages.DidOpenTextDocumentNotification, func(rawParams json.RawMessage) (err error) {
+		log.Info("received didOpenTextDocument method", slog.Any("params", rawParams))
 
-		var p messages.DidOpenTextDocumentParams
-		if err = json.Unmarshal(params, &p); err != nil {
+		var params messages.DidOpenTextDocumentParams
+		if err = json.Unmarshal(rawParams, &params); err != nil {
 			return
 		}
 		// Store the contents.
-		uriToContents[p.TextDocument.URI] = p.TextDocument.Text
+		uriToContents[params.TextDocument.URI] = params.TextDocument.Text
+
+		go func(doc messages.TextDocumentItem) {
+			swearWordRanges := findSwearWords(doc.Text)
+			diagnostics := make([]messages.Diagnostic, len(swearWordRanges))
+			for i, r := range swearWordRanges {
+				diagnostics[i] = messages.Diagnostic{
+					Range:    r,
+					Severity: ptr(messages.DiagnosticSeverityWarning),
+					Source:   ptr("examplelsp"),
+					Message:  "Mild swearword",
+				}
+			}
+			p.Notify(messages.PublishDiagnosticsMethod, messages.PublishDiagnosticsParams{
+				URI:         doc.URI,
+				Version:     &doc.Version,
+				Diagnostics: diagnostics,
+			})
+		}(params.TextDocument)
 
 		return nil
 	})
@@ -75,4 +94,41 @@ func main() {
 	if err := p.Process(); err != nil {
 		log.Error("processing stopped", slog.Any("error", err))
 	}
+}
+
+func ptr[T any](v T) *T {
+	return &v
+}
+
+// https://www.digitalspy.com/tv/a809925/ofcom-swear-words-ranking-in-order-of-offensiveness/
+var swearWords = []string{
+	"arse",
+	"bloody",
+	"cow",
+	"damn",
+	"git",
+	"jesus christ",
+	"minger",
+	"sod off",
+}
+
+func findSwearWords(text string) (ranges []messages.Range) {
+	for lineIndex, line := range strings.Split(text, "\n") {
+		line := strings.ToLower(line)
+		for _, sw := range swearWords {
+			if swIndex := strings.Index(line, sw); swIndex >= 0 {
+				ranges = append(ranges, messages.Range{
+					Start: messages.Position{
+						Line:      lineIndex,
+						Character: swIndex,
+					},
+					End: messages.Position{
+						Line:      lineIndex,
+						Character: swIndex + len(sw),
+					},
+				})
+			}
+		}
+	}
+	return ranges
 }
