@@ -60,17 +60,10 @@ func main() {
 		return nil
 	})
 
-	p.SetNotificationHandler(messages.DidOpenTextDocumentNotification, func(rawParams json.RawMessage) (err error) {
-		log.Info("received didOpenTextDocument method", slog.Any("params", rawParams))
-
-		var params messages.DidOpenTextDocumentParams
-		if err = json.Unmarshal(rawParams, &params); err != nil {
-			return
-		}
-		// Store the contents.
-		uriToContents[params.TextDocument.URI] = params.TextDocument.Text
-
-		go func(doc messages.TextDocumentItem) {
+	// Create a queue to process document updates in the order they're received.
+	documentUpdates := make(chan messages.TextDocumentItem, 10)
+	go func() {
+		for doc := range documentUpdates {
 			swearWordRanges := findSwearWords(doc.Text)
 			diagnostics := make([]messages.Diagnostic, len(swearWordRanges))
 			for i, r := range swearWordRanges {
@@ -86,7 +79,42 @@ func main() {
 				Version:     &doc.Version,
 				Diagnostics: diagnostics,
 			})
-		}(params.TextDocument)
+		}
+	}()
+
+	p.SetNotificationHandler(messages.DidOpenTextDocumentNotification, func(rawParams json.RawMessage) (err error) {
+		log.Info("received didOpenTextDocument notification", slog.Any("params", rawParams))
+
+		var params messages.DidOpenTextDocumentParams
+		if err = json.Unmarshal(rawParams, &params); err != nil {
+			return
+		}
+		// Store the contents.
+		uriToContents[params.TextDocument.URI] = params.TextDocument.Text
+
+		documentUpdates <- params.TextDocument
+
+		return nil
+	})
+
+	p.SetNotificationHandler(messages.DidChangeTextDocumentNotification, func(rawParams json.RawMessage) (err error) {
+		log.Info("received didChangeTextDocument notification", slog.Any("params", rawParams))
+
+		var params messages.DidChangeTextDocumentParams
+		if err = json.Unmarshal(rawParams, &params); err != nil {
+			return
+		}
+
+		// In our response to Initializes, we told the client that we need the
+		// full content of every document every time - we can't handle partial
+		// updates, so there's got to only be one event.
+		uriToContents[params.TextDocument.URI] = params.ContentChanges[0].Text
+
+		documentUpdates <- messages.TextDocumentItem{
+			URI:     params.TextDocument.URI,
+			Version: params.TextDocument.Version,
+			Text:    params.ContentChanges[0].Text,
+		}
 
 		return nil
 	})
