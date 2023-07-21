@@ -106,7 +106,39 @@ func main() {
 				}
 			}
 			if recipe != nil {
-				//TODO: Look for logical inconsistencies.
+				// Look for silly American measurements.
+				lines := strings.Split(doc.Text, "\n")
+				for _, step := range recipe.Steps {
+					for _, ingredient := range step.Ingredients {
+						im := ingredientMarkup(ingredient)
+
+						if ingredient.Amount.Unit == "cup" {
+							// Find the position.
+							for lineIndex, line := range lines {
+								ingredientIndex := strings.Index(line, im)
+								if ingredientIndex < 0 {
+									continue
+								}
+								// Find the step line.
+								diagnostics = append(diagnostics, messages.Diagnostic{
+									Range: messages.Range{
+										Start: messages.Position{
+											Line:      lineIndex,
+											Character: ingredientIndex,
+										},
+										End: messages.Position{
+											Line:      lineIndex,
+											Character: ingredientIndex + len(im),
+										},
+									},
+									Severity: ptr(messages.DiagnosticSeverityInformation),
+									Source:   ptr("examplelsp"),
+									Message:  "Cups are a silly measurement, consider grams",
+								})
+							}
+						}
+					}
+				}
 			}
 			swearWordRanges := findSwearWords(doc.Text)
 			for _, r := range swearWordRanges {
@@ -160,6 +192,17 @@ func main() {
 	if err := p.Process(); err != nil {
 		log.Error("processing stopped", slog.Any("error", err))
 	}
+}
+
+func ingredientMarkup(ingredient cooklang.Ingredient) string {
+	if !strings.Contains(ingredient.Name, " ") && ingredient.Amount.QuantityRaw == "" {
+		return fmt.Sprintf("@%s", ingredient.Name)
+	}
+	unit := ingredient.Amount.Unit
+	if unit != "" {
+		unit = "%" + unit
+	}
+	return fmt.Sprintf("@%s{%s%s}", ingredient.Name, ingredient.Amount.QuantityRaw, unit)
 }
 
 func getLineLengths(s string) (lengths []int) {
