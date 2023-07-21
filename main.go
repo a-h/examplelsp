@@ -76,7 +76,7 @@ func main() {
 		}()
 		lineRegexp := regexp.MustCompile(`^line (\d+):`)
 		for doc := range documentUpdates {
-			var diagnostics []messages.Diagnostic
+			diagnostics := []messages.Diagnostic{}
 
 			lineLengths := getLineLengths(doc.Text)
 			recipe, err := cooklang.ParseString(doc.Text)
@@ -101,7 +101,7 @@ func main() {
 						},
 						Severity: ptr(messages.DiagnosticSeverityError),
 						Source:   ptr("examplelsp"),
-						Message:  err.Error(), //strings.SplitN(err.Error(), ":", 2)[0],
+						Message:  strings.SplitN(err.Error(), ":", 2)[1],
 					})
 				}
 			}
@@ -117,7 +117,6 @@ func main() {
 					Message:  "Mild swearword",
 				})
 			}
-			log.Info("sending notifications")
 			p.Notify(messages.PublishDiagnosticsMethod, messages.PublishDiagnosticsParams{
 				URI:         doc.URI,
 				Version:     &doc.Version,
@@ -180,30 +179,32 @@ func ptr[T any](v T) *T {
 }
 
 // https://www.digitalspy.com/tv/a809925/ofcom-swear-words-ranking-in-order-of-offensiveness/
-var swearWords = []string{
-	"arse",
-	"bloody",
-	"cow",
-	"damn",
-	"git",
-	"jesus christ",
-	"minger",
-	"sod off",
+var swearWords = map[string]struct{}{
+	"arse":         {},
+	"bloody":       {},
+	"cow":          {},
+	"damn":         {},
+	"git":          {},
+	"jesus christ": {},
+	"minger":       {},
+	"sod off":      {},
 }
+
+var wordRegexp = regexp.MustCompile(`\w+`)
 
 func findSwearWords(text string) (ranges []messages.Range) {
 	for lineIndex, line := range strings.Split(text, "\n") {
-		line := strings.ToLower(line)
-		for _, sw := range swearWords {
-			if swIndex := strings.Index(line, sw); swIndex >= 0 {
+		for _, wordPosition := range wordRegexp.FindAllStringIndex(line, -1) {
+			word := strings.ToLower(line[wordPosition[0]:wordPosition[1]])
+			if _, isSwearword := swearWords[word]; isSwearword {
 				ranges = append(ranges, messages.Range{
 					Start: messages.Position{
 						Line:      lineIndex,
-						Character: swIndex,
+						Character: wordPosition[0],
 					},
 					End: messages.Position{
 						Line:      lineIndex,
-						Character: swIndex + len(sw),
+						Character: wordPosition[0] + wordPosition[1],
 					},
 				})
 			}
