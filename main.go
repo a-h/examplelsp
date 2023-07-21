@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/a-h/examplelsp/messages"
 	"github.com/a-h/examplelsp/protocol"
+	"github.com/aquilax/cooklang-go"
 	"golang.org/x/exp/slog"
 )
 
@@ -20,8 +23,11 @@ func main() {
 	}
 	defer lf.Close()
 	log := slog.New(slog.NewJSONHandler(lf, nil))
-
-	uriToContents := map[string]string{}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("panic", slog.Any("recovered", r))
+		}
+	}()
 
 	p := protocol.New(log, os.Stdin, os.Stdout)
 
@@ -63,17 +69,55 @@ func main() {
 	// Create a queue to process document updates in the order they're received.
 	documentUpdates := make(chan messages.TextDocumentItem, 10)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error("recovered document update panic", slog.Any("error", r))
+			}
+		}()
+		lineRegexp := regexp.MustCompile(`^line (\d+):`)
 		for doc := range documentUpdates {
+			var diagnostics []messages.Diagnostic
+
+			lineLengths := getLineLengths(doc.Text)
+			recipe, err := cooklang.ParseString(doc.Text)
+			if err != nil {
+				if lineRegexp.MatchString(err.Error()) {
+					line, lineNumberErr := strconv.ParseInt(lineRegexp.FindStringSubmatch(err.Error())[1], 10, 64)
+					if lineNumberErr != nil {
+						log.Error("failed to parse line number from error message", slog.Any("error", lineNumberErr))
+						line = 1
+					}
+					line-- // LSP positions are zero based.
+					diagnostics = append(diagnostics, messages.Diagnostic{
+						Range: messages.Range{
+							Start: messages.Position{
+								Line:      int(line),
+								Character: 0,
+							},
+							End: messages.Position{
+								Line:      int(line),
+								Character: lineLengths[line],
+							},
+						},
+						Severity: ptr(messages.DiagnosticSeverityError),
+						Source:   ptr("examplelsp"),
+						Message:  err.Error(), //strings.SplitN(err.Error(), ":", 2)[0],
+					})
+				}
+			}
+			if recipe != nil {
+				//TODO: Look for logical inconsistencies.
+			}
 			swearWordRanges := findSwearWords(doc.Text)
-			diagnostics := make([]messages.Diagnostic, len(swearWordRanges))
-			for i, r := range swearWordRanges {
-				diagnostics[i] = messages.Diagnostic{
+			for _, r := range swearWordRanges {
+				diagnostics = append(diagnostics, messages.Diagnostic{
 					Range:    r,
 					Severity: ptr(messages.DiagnosticSeverityWarning),
 					Source:   ptr("examplelsp"),
 					Message:  "Mild swearword",
-				}
+				})
 			}
+			log.Info("sending notifications")
 			p.Notify(messages.PublishDiagnosticsMethod, messages.PublishDiagnosticsParams{
 				URI:         doc.URI,
 				Version:     &doc.Version,
@@ -89,9 +133,6 @@ func main() {
 		if err = json.Unmarshal(rawParams, &params); err != nil {
 			return
 		}
-		// Store the contents.
-		uriToContents[params.TextDocument.URI] = params.TextDocument.Text
-
 		documentUpdates <- params.TextDocument
 
 		return nil
@@ -108,8 +149,6 @@ func main() {
 		// In our response to Initializes, we told the client that we need the
 		// full content of every document every time - we can't handle partial
 		// updates, so there's got to only be one event.
-		uriToContents[params.TextDocument.URI] = params.ContentChanges[0].Text
-
 		documentUpdates <- messages.TextDocumentItem{
 			URI:     params.TextDocument.URI,
 			Version: params.TextDocument.Version,
@@ -122,6 +161,18 @@ func main() {
 	if err := p.Process(); err != nil {
 		log.Error("processing stopped", slog.Any("error", err))
 	}
+}
+
+func getLineLengths(s string) (lengths []int) {
+	var c int
+	for _, r := range s {
+		c++
+		if r == '\n' {
+			lengths = append(lengths, c)
+			c = 0
+		}
+	}
+	return
 }
 
 func ptr[T any](v T) *T {
