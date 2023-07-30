@@ -31,7 +31,7 @@ func main() {
 
 	p := protocol.New(log, os.Stdin, os.Stdout)
 
-	p.SetMethodHandler("initialize", func(params json.RawMessage) (result any, err error) {
+	p.HandleMethod("initialize", func(params json.RawMessage) (result any, err error) {
 		var initializeParams messages.InitializeParams
 		if err = json.Unmarshal(params, &initializeParams); err != nil {
 			return
@@ -49,7 +49,7 @@ func main() {
 		return
 	})
 
-	p.SetNotificationHandler("initialized", func(params json.RawMessage) (err error) {
+	p.HandleNotification("initialized", func(params json.RawMessage) (err error) {
 		log.Info("received initialized notification", slog.Any("params", params))
 		// Start the message pusher.
 		go func() {
@@ -157,7 +157,7 @@ func main() {
 		}
 	}()
 
-	p.SetNotificationHandler(messages.DidOpenTextDocumentNotification, func(rawParams json.RawMessage) (err error) {
+	p.HandleNotification(messages.DidOpenTextDocumentNotification, func(rawParams json.RawMessage) (err error) {
 		log.Info("received didOpenTextDocument notification", slog.Any("params", rawParams))
 
 		var params messages.DidOpenTextDocumentParams
@@ -169,7 +169,7 @@ func main() {
 		return nil
 	})
 
-	p.SetNotificationHandler(messages.DidChangeTextDocumentNotification, func(rawParams json.RawMessage) (err error) {
+	p.HandleNotification(messages.DidChangeTextDocumentNotification, func(rawParams json.RawMessage) (err error) {
 		log.Info("received didChangeTextDocument notification", slog.Any("params", rawParams))
 
 		var params messages.DidChangeTextDocumentParams

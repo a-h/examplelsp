@@ -157,11 +157,11 @@ func Write(w *bufio.Writer, resp Message) (err error) {
 
 func New(log *slog.Logger, r io.Reader, w io.Writer) *Transport {
 	return &Transport{
-		r:                    bufio.NewReader(r),
+		reader:               bufio.NewReader(r),
 		concurrencyLimit:     4,
 		methodHandlers:       map[string]MethodHandler{},
 		notificationHandlers: map[string]NotificationHandler{},
-		w:                    bufio.NewWriter(w),
+		writer:               bufio.NewWriter(w),
 		writeLock:            &sync.Mutex{},
 		log:                  log,
 		error: func(err error) {
@@ -171,11 +171,11 @@ func New(log *slog.Logger, r io.Reader, w io.Writer) *Transport {
 }
 
 type Transport struct {
-	r                    *bufio.Reader
+	reader               *bufio.Reader
 	concurrencyLimit     int64
 	methodHandlers       map[string]MethodHandler
 	notificationHandlers map[string]NotificationHandler
-	w                    *bufio.Writer
+	writer               *bufio.Writer
 	writeLock            *sync.Mutex
 	log                  *slog.Logger
 	error                func(err error)
@@ -184,11 +184,11 @@ type Transport struct {
 type MethodHandler func(params json.RawMessage) (result any, err error)
 type NotificationHandler func(params json.RawMessage) (err error)
 
-func (t *Transport) SetMethodHandler(name string, method MethodHandler) {
+func (t *Transport) HandleMethod(name string, method MethodHandler) {
 	t.methodHandlers[name] = method
 }
 
-func (t *Transport) SetNotificationHandler(name string, notification NotificationHandler) {
+func (t *Transport) HandleNotification(name string, notification NotificationHandler) {
 	t.notificationHandlers[name] = notification
 }
 
@@ -204,41 +204,48 @@ func (t *Transport) Notify(method string, params any) (err error) {
 func (t *Transport) write(msg Message) (err error) {
 	t.writeLock.Lock()
 	defer t.writeLock.Unlock()
-	return Write(t.w, msg)
+	return Write(t.writer, msg)
 }
 
 func (t *Transport) Process() (err error) {
 	sem := make(chan struct{}, t.concurrencyLimit)
 	for {
 		sem <- struct{}{}
-		req, err := Read(t.r)
+		req, err := Read(t.reader)
 		if err != nil {
 			return err
 		}
 		go func(req Request) {
-			t.handleRequest(req)
+			t.handleMessage(req)
 			<-sem
 		}(req)
 	}
 }
 
-func (t *Transport) handleRequest(req Request) {
-	log := t.log.With(slog.Any("id", req.ID), slog.String("method", req.Method))
+func (t *Transport) handleMessage(req Request) {
 	if req.IsNotification() {
-		nh, ok := t.notificationHandlers[req.Method]
-		if !ok {
-			log.Warn("notification not handled")
-			return
-		}
-		// We don't need to notify clients if the notification results in an error.
-		if err := nh(req.Params); err != nil && t.error != nil {
-			log.Error("failed to handle notification", slog.Any("error", err))
-			t.error(err)
-		}
+		t.handleNotification(req)
 		return
 	}
-	// As per Base Protocol JSON structures in the specification batch messages are not supported.
-	// > The protocol currently does not support JSON-RPC batch messages; protocol clients and servers must not send JSON-RPC requests.
+	t.handleRequestResponse(req)
+}
+
+func (t *Transport) handleNotification(req Request) {
+	log := t.log.With(slog.String("method", req.Method))
+	nh, ok := t.notificationHandlers[req.Method]
+	if !ok {
+		log.Warn("notification not handled")
+		return
+	}
+	// We don't need to notify clients if the notification results in an error.
+	if err := nh(req.Params); err != nil && t.error != nil {
+		log.Error("failed to handle notification", slog.Any("error", err))
+		t.error(err)
+	}
+}
+
+func (t *Transport) handleRequestResponse(req Request) {
+	log := t.log.With(slog.Any("id", req.ID), slog.String("method", req.Method))
 	mh, ok := t.methodHandlers[req.Method]
 	if !ok {
 		log.Error("method not found")
