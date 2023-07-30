@@ -24,7 +24,7 @@ func TestRequestNotification(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			var msg Message
+			var msg Request
 			err := json.Unmarshal([]byte(test.msg), &msg)
 			if err != nil {
 				t.Fatalf("failed to unmarshal message: %v", err)

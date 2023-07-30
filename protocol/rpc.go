@@ -16,7 +16,7 @@ import (
 const protocolVersion = "2.0"
 
 type Message interface {
-	IsJSONRPC()
+	IsJSONRPC() bool
 }
 
 type Request struct {
@@ -26,7 +26,9 @@ type Request struct {
 	Params          json.RawMessage  `json:"params"`
 }
 
-func (r Request) IsJSONRPC() {}
+func (r Request) IsJSONRPC() bool {
+	return r.ProtocolVersion == protocolVersion
+}
 
 func (r Request) IsNotification() bool {
 	return r.ID == nil
@@ -71,7 +73,9 @@ type Response struct {
 	Error           *Error           `json:"error"`
 }
 
-func (r Response) IsJSONRPC() {}
+func (r Response) IsJSONRPC() bool {
+	return r.ProtocolVersion == protocolVersion
+}
 
 type Error struct {
 	// Code is a Number that indicates the error type that occurred.
@@ -85,14 +89,6 @@ type Error struct {
 	Data any `json:"data"`
 }
 
-type Notification struct {
-	ProtocolVersion string `json:"jsonrpc"`
-	Method          string `json:"method"`
-	Params          any    `json:"params"`
-}
-
-func (n Notification) IsJSONRPC() {}
-
 func (e *Error) Error() string {
 	return e.Message
 }
@@ -104,6 +100,16 @@ var (
 	ErrInvalidParams  *Error = &Error{Code: -32602, Message: "Invalid params"}
 	ErrInternal       *Error = &Error{Code: -32603, Message: "Internal error"}
 )
+
+type Notification struct {
+	ProtocolVersion string `json:"jsonrpc"`
+	Method          string `json:"method"`
+	Params          any    `json:"params"`
+}
+
+func (n Notification) IsJSONRPC() bool {
+	return n.ProtocolVersion == protocolVersion
+}
 
 func Read(r *bufio.Reader) (req Request, err error) {
 	// Read header.
@@ -117,6 +123,12 @@ func Read(r *bufio.Reader) (req Request, err error) {
 	}
 	// Read body.
 	err = json.NewDecoder(io.LimitReader(r, contentLength)).Decode(&req)
+	if err != nil {
+		return
+	}
+	if !req.IsJSONRPC() {
+		return req, ErrInvalidRequest
+	}
 	return
 }
 
@@ -225,7 +237,8 @@ func (t *Transport) handleRequest(req Request) {
 		}
 		return
 	}
-	//TODO: Handle batch requests?
+	// As per Base Protocol JSON structures in the specification batch messages are not supported.
+	// > The protocol currently does not support JSON-RPC batch messages; protocol clients and servers must not send JSON-RPC requests.
 	mh, ok := t.methodHandlers[req.Method]
 	if !ok {
 		log.Error("method not found")
