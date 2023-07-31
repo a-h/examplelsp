@@ -94,11 +94,12 @@ func (e *Error) Error() string {
 }
 
 var (
-	ErrParseError     *Error = &Error{Code: -32700, Message: "Parse error"}
-	ErrInvalidRequest *Error = &Error{Code: -32600, Message: "Invalid Request"}
-	ErrMethodNotFound *Error = &Error{Code: -32601, Message: "Method not found"}
-	ErrInvalidParams  *Error = &Error{Code: -32602, Message: "Invalid params"}
-	ErrInternal       *Error = &Error{Code: -32603, Message: "Internal error"}
+	ErrParseError           *Error = &Error{Code: -32700, Message: "Parse error"}
+	ErrInvalidRequest       *Error = &Error{Code: -32600, Message: "Invalid Request"}
+	ErrMethodNotFound       *Error = &Error{Code: -32601, Message: "Method not found"}
+	ErrInvalidParams        *Error = &Error{Code: -32602, Message: "Invalid params"}
+	ErrInternal             *Error = &Error{Code: -32603, Message: "Internal error"}
+	ErrServerNotInitialized *Error = &Error{Code: -32002, Message: "Server not initialized"}
 )
 
 type Notification struct {
@@ -171,6 +172,7 @@ func New(log *slog.Logger, r io.Reader, w io.Writer) *Transport {
 }
 
 type Transport struct {
+	initialized          bool
 	reader               *bufio.Reader
 	concurrencyLimit     int64
 	methodHandlers       map[string]MethodHandler
@@ -208,6 +210,35 @@ func (t *Transport) write(msg Message) (err error) {
 }
 
 func (t *Transport) Process() (err error) {
+	// Handle initialization.
+	for {
+		req, err := Read(t.reader)
+		if err != nil {
+			return err
+		}
+		if req.IsNotification() {
+			if req.Method != "exit" {
+				// Drop notifications sent before initialization.
+				t.log.Warn("dropping notification sent before initialization", slog.Any("req", req))
+				continue
+			}
+			t.handleMessage(req)
+			continue
+		}
+		if req.Method != "initialize" {
+			// Return an error if methods used before initialization.
+			t.log.Warn("the client sent a method before initialization", slog.Any("req", req))
+			if err = t.write(NewResponseError(req.ID, ErrServerNotInitialized)); err != nil {
+				return err
+			}
+			continue
+		}
+		t.handleMessage(req)
+		break
+	}
+	t.log.Info("initialization complete")
+
+	// Handle standard flow.
 	sem := make(chan struct{}, t.concurrencyLimit)
 	for {
 		sem <- struct{}{}
