@@ -135,9 +135,9 @@ func Read(r *bufio.Reader) (req Request, err error) {
 
 var ErrInvalidContentLengthHeader = errors.New("missing or invalid Content-Length header")
 
-func Write(w *bufio.Writer, resp Message) (err error) {
+func Write(w *bufio.Writer, msg Message) (err error) {
 	// Calculate body size.
-	body, err := json.Marshal(resp)
+	body, err := json.Marshal(msg)
 	if err != nil {
 		return
 	}

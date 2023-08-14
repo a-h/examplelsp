@@ -69,86 +69,11 @@ func main() {
 	// Create a queue to process document updates in the order they're received.
 	documentUpdates := make(chan messages.TextDocumentItem, 10)
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Error("recovered document update panic", slog.Any("error", r))
-			}
-		}()
-		lineRegexp := regexp.MustCompile(`^line (\d+):`)
 		for doc := range documentUpdates {
 			diagnostics := []messages.Diagnostic{}
-
-			lineLengths := getLineLengths(doc.Text)
-			recipe, err := cooklang.ParseString(doc.Text)
-			if err != nil {
-				if lineRegexp.MatchString(err.Error()) {
-					line, lineNumberErr := strconv.ParseInt(lineRegexp.FindStringSubmatch(err.Error())[1], 10, 64)
-					if lineNumberErr != nil {
-						log.Error("failed to parse line number from error message", slog.Any("error", lineNumberErr))
-						line = 1
-					}
-					line-- // LSP positions are zero based.
-					diagnostics = append(diagnostics, messages.Diagnostic{
-						Range: messages.Range{
-							Start: messages.Position{
-								Line:      int(line),
-								Character: 0,
-							},
-							End: messages.Position{
-								Line:      int(line),
-								Character: lineLengths[line],
-							},
-						},
-						Severity: ptr(messages.DiagnosticSeverityError),
-						Source:   ptr("examplelsp"),
-						Message:  strings.SplitN(err.Error(), ":", 2)[1],
-					})
-				}
-			}
-			if recipe != nil {
-				// Look for silly American measurements.
-				lines := strings.Split(doc.Text, "\n")
-				for _, step := range recipe.Steps {
-					for _, ingredient := range step.Ingredients {
-						im := ingredientMarkup(ingredient)
-
-						if ingredient.Amount.Unit == "cup" {
-							// Find the position.
-							for lineIndex, line := range lines {
-								ingredientIndex := strings.Index(line, im)
-								if ingredientIndex < 0 {
-									continue
-								}
-								// Find the step line.
-								diagnostics = append(diagnostics, messages.Diagnostic{
-									Range: messages.Range{
-										Start: messages.Position{
-											Line:      lineIndex,
-											Character: ingredientIndex,
-										},
-										End: messages.Position{
-											Line:      lineIndex,
-											Character: ingredientIndex + len(im),
-										},
-									},
-									Severity: ptr(messages.DiagnosticSeverityInformation),
-									Source:   ptr("examplelsp"),
-									Message:  "Cups are a silly measurement, consider grams",
-								})
-							}
-						}
-					}
-				}
-			}
-			swearWordRanges := findSwearWords(doc.Text)
-			for _, r := range swearWordRanges {
-				diagnostics = append(diagnostics, messages.Diagnostic{
-					Range:    r,
-					Severity: ptr(messages.DiagnosticSeverityWarning),
-					Source:   ptr("examplelsp"),
-					Message:  "Mild swearword",
-				})
-			}
+			diagnostics = append(diagnostics, getRecipeParseErrorDiagnostics(doc.Text)...)
+			diagnostics = append(diagnostics, getAmericanMeasurementsDiagnostics(doc.Text)...)
+			diagnostics = append(diagnostics, getSwearwordDiagnostics(doc.Text)...)
 			p.Notify(messages.PublishDiagnosticsMethod, messages.PublishDiagnosticsParams{
 				URI:         doc.URI,
 				Version:     &doc.Version,
@@ -194,6 +119,88 @@ func main() {
 	}
 }
 
+func getSwearwordDiagnostics(text string) (diagnostics []messages.Diagnostic) {
+	swearWordRanges := findSwearWords(text)
+	for _, r := range swearWordRanges {
+		diagnostics = append(diagnostics, messages.Diagnostic{
+			Range:    r,
+			Severity: ptr(messages.DiagnosticSeverityWarning),
+			Source:   ptr("examplelsp"),
+			Message:  "Mild swearword",
+		})
+	}
+	return
+}
+
+func getAmericanMeasurementsDiagnostics(text string) (diagnostics []messages.Diagnostic) {
+	recipe, err := cooklang.ParseString(text)
+	if err != nil {
+		return
+	}
+	lines := strings.Split(text, "\n")
+	for _, step := range recipe.Steps {
+		for _, ingredient := range step.Ingredients {
+			if ingredient.Amount.Unit == "cup" {
+				im := ingredientMarkup(ingredient)
+				// Find the position.
+				for lineIndex, line := range lines {
+					ingredientIndex := strings.Index(line, im)
+					if ingredientIndex < 0 {
+						continue
+					}
+					// Find the step line.
+					diagnostics = append(diagnostics, messages.Diagnostic{
+						Range: messages.Range{
+							Start: messages.Position{
+								Line:      lineIndex,
+								Character: ingredientIndex,
+							},
+							End: messages.Position{
+								Line:      lineIndex,
+								Character: ingredientIndex + len(im),
+							},
+						},
+						Severity: ptr(messages.DiagnosticSeverityInformation),
+						Source:   ptr("examplelsp"),
+						Message:  "Cups are a silly measurement, consider grams",
+					})
+				}
+			}
+		}
+	}
+	return
+}
+
+var lineRegexp = regexp.MustCompile(`^line (\d+):`)
+
+func getRecipeParseErrorDiagnostics(text string) (diagnostics []messages.Diagnostic) {
+	_, err := cooklang.ParseString(text)
+	if err == nil || !lineRegexp.MatchString(err.Error()) {
+		return
+	}
+	line, lineNumberErr := strconv.ParseInt(lineRegexp.FindStringSubmatch(err.Error())[1], 10, 64)
+	if lineNumberErr != nil {
+		line = 1
+	}
+	line-- // LSP positions are zero based.
+	diagnostics = append(diagnostics, messages.Diagnostic{
+		Range: messages.Range{
+			Start: messages.Position{
+				Line:      int(line),
+				Character: 0,
+			},
+			End: messages.Position{
+				Line:      int(line),
+				Character: getLineLength(text, line),
+			},
+		},
+		Severity: ptr(messages.DiagnosticSeverityError),
+		Source:   ptr("examplelsp"),
+		Message:  strings.SplitN(err.Error(), ":", 2)[1],
+	})
+	return
+}
+
 func ingredientMarkup(ingredient cooklang.Ingredient) string {
 	if !strings.Contains(ingredient.Name, " ") && ingredient.Amount.QuantityRaw == "" {
 		return fmt.Sprintf("@%s", ingredient.Name)
@@ -205,13 +212,17 @@ func ingredientMarkup(ingredient cooklang.Ingredient) string {
 	return fmt.Sprintf("@%s{%s%s}", ingredient.Name, ingredient.Amount.QuantityRaw, unit)
 }
 
-func getLineLengths(s string) (lengths []int) {
+func getLineLength[T int | int64](s string, lineIndex T) (length int) {
+	var l T
 	var c int
 	for _, r := range s {
 		c++
 		if r == '\n' {
-			lengths = append(lengths, c)
+			if lineIndex == l {
+				return c
+			}
 			c = 0
+			l++
 		}
 	}
 	return
