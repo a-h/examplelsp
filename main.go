@@ -41,6 +41,9 @@ func main() {
 		result = messages.InitializeResult{
 			Capabilities: messages.ServerCapabilities{
 				TextDocumentSync: messages.TextDocumentSyncKindFull,
+				CompletionProvider: &messages.CompletionOptions{
+					TriggerCharacters: []string{"%"},
+				},
 			},
 			ServerInfo: &messages.ServerInfo{
 				Name: "examplelsp",
@@ -66,6 +69,33 @@ func main() {
 		return nil
 	})
 
+	p.HandleMethod(messages.CompletionRequestMethod, func(rawParams json.RawMessage) (result any, err error) {
+		log.Info("received completion request", slog.Any("params", rawParams))
+
+		var params messages.CompletionParams
+		if err = json.Unmarshal(rawParams, &params); err != nil {
+			return
+		}
+
+		// TODO: Set appropriate completion results.
+		result = messages.CompletionResult{
+			Items: []messages.CompletionItem{
+				{
+					Label:         "Hello A",
+					Kind:          messages.CompletionItemKindUnit,
+					Documentation: "Says hello",
+				},
+				{
+					Label:         "Hello B",
+					Kind:          messages.CompletionItemKindUnit,
+					Documentation: "Says hello",
+				},
+			},
+		}
+
+		return
+	})
+
 	// Create a queue to process document updates in the order they're received.
 	documentUpdates := make(chan messages.TextDocumentItem, 10)
 	go func() {
@@ -83,7 +113,7 @@ func main() {
 	}()
 
 	p.HandleNotification(messages.DidOpenTextDocumentNotification, func(rawParams json.RawMessage) (err error) {
-		log.Info("received didOpenTextDocument notification", slog.Any("params", rawParams))
+		log.Info("received didOpenTextDocument notification")
 
 		var params messages.DidOpenTextDocumentParams
 		if err = json.Unmarshal(rawParams, &params); err != nil {
@@ -95,7 +125,7 @@ func main() {
 	})
 
 	p.HandleNotification(messages.DidChangeTextDocumentNotification, func(rawParams json.RawMessage) (err error) {
-		log.Info("received didChangeTextDocument notification", slog.Any("params", rawParams))
+		log.Info("received didChangeTextDocument notification")
 
 		var params messages.DidChangeTextDocumentParams
 		if err = json.Unmarshal(rawParams, &params); err != nil {
@@ -151,14 +181,8 @@ func getAmericanMeasurementsDiagnostics(text string) (diagnostics []messages.Dia
 					// Find the step line.
 					diagnostics = append(diagnostics, messages.Diagnostic{
 						Range: messages.Range{
-							Start: messages.Position{
-								Line:      lineIndex,
-								Character: ingredientIndex,
-							},
-							End: messages.Position{
-								Line:      lineIndex,
-								Character: ingredientIndex + len(im),
-							},
+							Start: messages.NewPosition(lineIndex, ingredientIndex),
+							End:   messages.NewPosition(lineIndex, ingredientIndex+len(im)),
 						},
 						Severity: ptr(messages.DiagnosticSeverityInformation),
 						Source:   ptr("examplelsp"),
@@ -185,14 +209,8 @@ func getRecipeParseErrorDiagnostics(text string) (diagnostics []messages.Diagnos
 	line-- // LSP positions are zero based.
 	diagnostics = append(diagnostics, messages.Diagnostic{
 		Range: messages.Range{
-			Start: messages.Position{
-				Line:      int(line),
-				Character: 0,
-			},
-			End: messages.Position{
-				Line:      int(line),
-				Character: getLineLength(text, line),
-			},
+			Start: messages.NewPosition(int(line), 0),
+			End:   messages.NewPosition(int(line), getLineLength(text, line)),
 		},
 		Severity: ptr(messages.DiagnosticSeverityError),
 		Source:   ptr("examplelsp"),

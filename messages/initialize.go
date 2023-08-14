@@ -24,7 +24,8 @@ type InitializeResult struct {
 
 // https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#serverCapabilities
 type ServerCapabilities struct {
-	TextDocumentSync TextDocumentSyncKind `json:"textDocumentSync"`
+	TextDocumentSync   TextDocumentSyncKind `json:"textDocumentSync"`
+	CompletionProvider *CompletionOptions   `json:"completionProvider,omitempty"`
 }
 
 type TextDocumentSyncKind int
@@ -34,6 +35,10 @@ const (
 	TextDocumentSyncKindFull
 	TextDocumentSyncKindIncremental
 )
+
+type CompletionOptions struct {
+	TriggerCharacters []string `json:"triggerCharacters,omitempty"`
+}
 
 type ServerInfo struct {
 	Name    string  `json:"name"`
