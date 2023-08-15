@@ -1,3 +1,5 @@
+github.com/a-h/lexical v0.0.53 h1:uXaV05/iWmVe8A/TxUXxPrpe7z3/8AVbWmOUEbYPe+Q=
+github.com/a-h/lexical v0.0.53/go.mod h1:d73jw5cgKXuYypRozNBuxRNFrTWQ3y5hVMG7rUjh1Qw=
 github.com/a-h/parse v0.0.0-20230403100123-b4e578365f5c h1:gfg9xKxIyRPDs9snLbiK6hX17cdB+6h4W+L85diCGUs=
 github.com/a-h/parse v0.0.0-20230403100123-b4e578365f5c/go.mod h1:3mnrkvGpurZ4ZrTDbYU84xhwXW2TjTKShSwjRi2ihfQ=
 github.com/aquilax/cooklang-go v0.1.7 h1:ynbGKI3o060m9NTlxnc1k7unjGOtJcfbxKWfiIOSqVo=

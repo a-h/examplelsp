@@ -12,20 +12,15 @@ let client: LanguageClient;
 export function activate(context: vscode.ExtensionContext) {
   vscode.window.showInformationMessage(`Starting LSP`);
   let serverOptions: ServerOptions = {
-	command: "examplelsp",
-	transport: TransportKind.stdio,
+    command: "examplelsp",
+    transport: TransportKind.stdio,
   };
 
   let clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: "file", language: "cook" }],
   };
 
-  client = new LanguageClient(
-    "cook",
-    "cook",
-    serverOptions,
-    clientOptions
-  );
+  client = new LanguageClient("cook", "cook", serverOptions, clientOptions);
 
   client.start();
 }

@@ -1,4 +1,4 @@
-package protocol
+package lsp
 
 import (
 	"bufio"
@@ -156,8 +156,8 @@ func Write(w *bufio.Writer, msg Message) (err error) {
 	return
 }
 
-func New(log *slog.Logger, r io.Reader, w io.Writer) *Transport {
-	return &Transport{
+func NewMux(log *slog.Logger, r io.Reader, w io.Writer) *Mux {
+	return &Mux{
 		reader:               bufio.NewReader(r),
 		concurrencyLimit:     4,
 		methodHandlers:       map[string]MethodHandler{},
@@ -171,7 +171,7 @@ func New(log *slog.Logger, r io.Reader, w io.Writer) *Transport {
 	}
 }
 
-type Transport struct {
+type Mux struct {
 	initialized          bool
 	reader               *bufio.Reader
 	concurrencyLimit     int64
@@ -186,103 +186,103 @@ type Transport struct {
 type MethodHandler func(params json.RawMessage) (result any, err error)
 type NotificationHandler func(params json.RawMessage) (err error)
 
-func (t *Transport) HandleMethod(name string, method MethodHandler) {
-	t.methodHandlers[name] = method
+func (m *Mux) HandleMethod(name string, method MethodHandler) {
+	m.methodHandlers[name] = method
 }
 
-func (t *Transport) HandleNotification(name string, notification NotificationHandler) {
-	t.notificationHandlers[name] = notification
+func (m *Mux) HandleNotification(name string, notification NotificationHandler) {
+	m.notificationHandlers[name] = notification
 }
 
-func (t *Transport) Notify(method string, params any) (err error) {
+func (m *Mux) Notify(method string, params any) (err error) {
 	n := Notification{
 		ProtocolVersion: protocolVersion,
 		Method:          method,
 		Params:          params,
 	}
-	return t.write(n)
+	return m.write(n)
 }
 
-func (t *Transport) write(msg Message) (err error) {
-	t.writeLock.Lock()
-	defer t.writeLock.Unlock()
-	return Write(t.writer, msg)
+func (m *Mux) write(msg Message) (err error) {
+	m.writeLock.Lock()
+	defer m.writeLock.Unlock()
+	return Write(m.writer, msg)
 }
 
-func (t *Transport) Process() (err error) {
+func (m *Mux) Process() (err error) {
 	// Handle initialization.
 	for {
-		req, err := Read(t.reader)
+		req, err := Read(m.reader)
 		if err != nil {
 			return err
 		}
 		if req.IsNotification() {
 			if req.Method != "exit" {
 				// Drop notifications sent before initialization.
-				t.log.Warn("dropping notification sent before initialization", slog.Any("req", req))
+				m.log.Warn("dropping notification sent before initialization", slog.Any("req", req))
 				continue
 			}
-			t.handleMessage(req)
+			m.handleMessage(req)
 			continue
 		}
 		if req.Method != "initialize" {
 			// Return an error if methods used before initialization.
-			t.log.Warn("the client sent a method before initialization", slog.Any("req", req))
-			if err = t.write(NewResponseError(req.ID, ErrServerNotInitialized)); err != nil {
+			m.log.Warn("the client sent a method before initialization", slog.Any("req", req))
+			if err = m.write(NewResponseError(req.ID, ErrServerNotInitialized)); err != nil {
 				return err
 			}
 			continue
 		}
-		t.handleMessage(req)
+		m.handleMessage(req)
 		break
 	}
-	t.log.Info("initialization complete")
+	m.log.Info("initialization complete")
 
 	// Handle standard flow.
-	sem := make(chan struct{}, t.concurrencyLimit)
+	sem := make(chan struct{}, m.concurrencyLimit)
 	for {
 		sem <- struct{}{}
-		req, err := Read(t.reader)
+		req, err := Read(m.reader)
 		if err != nil {
 			return err
 		}
 		go func(req Request) {
-			t.handleMessage(req)
+			m.handleMessage(req)
 			<-sem
 		}(req)
 	}
 }
 
-func (t *Transport) handleMessage(req Request) {
+func (m *Mux) handleMessage(req Request) {
 	if req.IsNotification() {
-		t.handleNotification(req)
+		m.handleNotification(req)
 		return
 	}
-	t.handleRequestResponse(req)
+	m.handleRequestResponse(req)
 }
 
-func (t *Transport) handleNotification(req Request) {
-	log := t.log.With(slog.String("method", req.Method))
-	nh, ok := t.notificationHandlers[req.Method]
+func (m *Mux) handleNotification(req Request) {
+	log := m.log.With(slog.String("method", req.Method))
+	nh, ok := m.notificationHandlers[req.Method]
 	if !ok {
 		log.Warn("notification not handled")
 		return
 	}
 	// We don't need to notify clients if the notification results in an error.
-	if err := nh(req.Params); err != nil && t.error != nil {
+	if err := nh(req.Params); err != nil && m.error != nil {
 		log.Error("failed to handle notification", slog.Any("error", err))
-		t.error(err)
+		m.error(err)
 	}
 }
 
-func (t *Transport) handleRequestResponse(req Request) {
-	log := t.log.With(slog.Any("id", req.ID), slog.String("method", req.Method))
-	mh, ok := t.methodHandlers[req.Method]
+func (m *Mux) handleRequestResponse(req Request) {
+	log := m.log.With(slog.Any("id", req.ID), slog.String("method", req.Method))
+	mh, ok := m.methodHandlers[req.Method]
 	if !ok {
 		log.Error("method not found")
-		if err := t.write(NewResponseError(req.ID, ErrMethodNotFound)); err != nil {
+		if err := m.write(NewResponseError(req.ID, ErrMethodNotFound)); err != nil {
 			log.Error("failed to respond", slog.Any("error", err))
-			t.error(fmt.Errorf("failed to respond: %w", err))
+			m.error(fmt.Errorf("failed to respond: %w", err))
 		}
 		return
 	}
@@ -294,8 +294,8 @@ func (t *Transport) handleRequestResponse(req Request) {
 	} else {
 		res = NewResponse(req.ID, result)
 	}
-	if err = t.write(res); err != nil {
+	if err = m.write(res); err != nil {
 		log.Error("failed to respond", slog.Any("error", err))
-		t.error(fmt.Errorf("failed to respond: %w", err))
+		m.error(fmt.Errorf("failed to respond: %w", err))
 	}
 }

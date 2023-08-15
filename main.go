@@ -5,12 +5,10 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
-	"time"
 
+	"github.com/a-h/examplelsp/lsp"
 	"github.com/a-h/examplelsp/messages"
-	"github.com/a-h/examplelsp/protocol"
 	"github.com/aquilax/cooklang-go"
 	"golang.org/x/exp/slog"
 )
@@ -29,9 +27,11 @@ func main() {
 		}
 	}()
 
-	p := protocol.New(log, os.Stdin, os.Stdout)
+	m := lsp.NewMux(log, os.Stdin, os.Stdout)
 
-	p.HandleMethod("initialize", func(params json.RawMessage) (result any, err error) {
+	fileURIToContents := map[string]string{}
+
+	m.HandleMethod("initialize", func(params json.RawMessage) (result any, err error) {
 		var initializeParams messages.InitializeParams
 		if err = json.Unmarshal(params, &initializeParams); err != nil {
 			return
@@ -52,24 +52,12 @@ func main() {
 		return
 	})
 
-	p.HandleNotification("initialized", func(params json.RawMessage) (err error) {
+	m.HandleNotification("initialized", func(params json.RawMessage) (err error) {
 		log.Info("received initialized notification", slog.Any("params", params))
-		// Start the message pusher.
-		go func() {
-			count := 1
-			for {
-				time.Sleep(time.Second * 1)
-				p.Notify(messages.ShowMessageMethod, messages.ShowMessageParams{
-					Type:    messages.MessageTypeInfo,
-					Message: fmt.Sprintf("Shown %d messages", count),
-				})
-				count++
-			}
-		}()
 		return nil
 	})
 
-	p.HandleMethod(messages.CompletionRequestMethod, func(rawParams json.RawMessage) (result any, err error) {
+	m.HandleMethod(messages.CompletionRequestMethod, func(rawParams json.RawMessage) (result any, err error) {
 		log.Info("received completion request", slog.Any("params", rawParams))
 
 		var params messages.CompletionParams
@@ -77,34 +65,31 @@ func main() {
 			return
 		}
 
-		// TODO: Set appropriate completion results.
-		result = messages.CompletionResult{
-			Items: []messages.CompletionItem{
-				{
-					Label:         "Hello A",
-					Kind:          messages.CompletionItemKindUnit,
-					Documentation: "Says hello",
-				},
-				{
-					Label:         "Hello B",
-					Kind:          messages.CompletionItemKindUnit,
-					Documentation: "Says hello",
-				},
-			},
+		doc, err := cooklang.ParseString(fileURIToContents[params.TextDocument.URI])
+		if err != nil {
+			return []messages.CompletionItem{}, nil
 		}
-
-		return
+		var r []messages.CompletionItem
+		for _, step := range doc.Steps {
+			for _, ingredient := range step.Ingredients {
+				if positionIsInRange(ingredient.Range, params.Position) {
+					r = append(r, ingredientUnitCompletionItems...)
+				}
+			}
+		}
+		return r, nil
 	})
 
 	// Create a queue to process document updates in the order they're received.
 	documentUpdates := make(chan messages.TextDocumentItem, 10)
 	go func() {
 		for doc := range documentUpdates {
+			fileURIToContents[doc.URI] = doc.Text
 			diagnostics := []messages.Diagnostic{}
 			diagnostics = append(diagnostics, getRecipeParseErrorDiagnostics(doc.Text)...)
 			diagnostics = append(diagnostics, getAmericanMeasurementsDiagnostics(doc.Text)...)
 			diagnostics = append(diagnostics, getSwearwordDiagnostics(doc.Text)...)
-			p.Notify(messages.PublishDiagnosticsMethod, messages.PublishDiagnosticsParams{
+			m.Notify(messages.PublishDiagnosticsMethod, messages.PublishDiagnosticsParams{
 				URI:         doc.URI,
 				Version:     &doc.Version,
 				Diagnostics: diagnostics,
@@ -112,7 +97,7 @@ func main() {
 		}
 	}()
 
-	p.HandleNotification(messages.DidOpenTextDocumentNotification, func(rawParams json.RawMessage) (err error) {
+	m.HandleNotification(messages.DidOpenTextDocumentNotification, func(rawParams json.RawMessage) (err error) {
 		log.Info("received didOpenTextDocument notification")
 
 		var params messages.DidOpenTextDocumentParams
@@ -124,7 +109,7 @@ func main() {
 		return nil
 	})
 
-	p.HandleNotification(messages.DidChangeTextDocumentNotification, func(rawParams json.RawMessage) (err error) {
+	m.HandleNotification(messages.DidChangeTextDocumentNotification, func(rawParams json.RawMessage) (err error) {
 		log.Info("received didChangeTextDocument notification")
 
 		var params messages.DidChangeTextDocumentParams
@@ -144,9 +129,37 @@ func main() {
 		return nil
 	})
 
-	if err := p.Process(); err != nil {
+	if err := m.Process(); err != nil {
 		log.Error("processing stopped", slog.Any("error", err))
 	}
+}
+
+var ingredientUnitCompletionItems = []messages.CompletionItem{
+	{
+		Label:         "g",
+		Kind:          messages.CompletionItemKindUnit,
+		Detail:        "grams",
+		Documentation: "Grams are a unit of mass.",
+	},
+	{
+		Label:         "kg",
+		Kind:          messages.CompletionItemKindUnit,
+		Detail:        "kilograms",
+		Documentation: "Kilograms are a unit of mass.",
+	},
+	{
+		Label:         "ml",
+		Kind:          messages.CompletionItemKindUnit,
+		Detail:        "milliliters",
+		Documentation: "Milliliters are a unit of volume.",
+	},
+}
+
+func positionIsInRange(r cooklang.Range, position messages.Position) bool {
+	return position.Line >= r.Start.Line &&
+		position.Line <= r.End.Line &&
+		position.Character >= r.Start.Character &&
+		position.Character <= r.End.Character
 }
 
 func getSwearwordDiagnostics(text string) (diagnostics []messages.Diagnostic) {
@@ -195,26 +208,23 @@ func getAmericanMeasurementsDiagnostics(text string) (diagnostics []messages.Dia
 	return
 }
 
-var lineRegexp = regexp.MustCompile(`^line (\d+):`)
-
 func getRecipeParseErrorDiagnostics(text string) (diagnostics []messages.Diagnostic) {
 	_, err := cooklang.ParseString(text)
-	if err == nil || !lineRegexp.MatchString(err.Error()) {
+	if err == nil {
 		return
 	}
-	line, lineNumberErr := strconv.ParseInt(lineRegexp.FindStringSubmatch(err.Error())[1], 10, 64)
-	if lineNumberErr != nil {
-		line = 1
+	cerr, isCooklangError := err.(*cooklang.Error)
+	if !isCooklangError {
+		return
 	}
-	line-- // LSP positions are zero based.
 	diagnostics = append(diagnostics, messages.Diagnostic{
 		Range: messages.Range{
-			Start: messages.NewPosition(int(line), 0),
-			End:   messages.NewPosition(int(line), getLineLength(text, line)),
+			Start: messages.NewPosition(cerr.Range.Start.Line, cerr.Range.Start.Character),
+			End:   messages.NewPosition(cerr.Range.End.Line, cerr.Range.End.Character),
 		},
 		Severity: ptr(messages.DiagnosticSeverityError),
 		Source:   ptr("examplelsp"),
-		Message:  strings.SplitN(err.Error(), ":", 2)[1],
+		Message:  cerr.Message,
 	})
 	return
 }
