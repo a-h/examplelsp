@@ -24,7 +24,13 @@
     "languages": [{
       "id": "cook",
       "aliases": ["cook"],
-      "extensions": [".cook", ".cooklang"]
+      "extensions": [".cook", ".cooklang"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "cook",
+      "scopeName": "source.cook",
+      "path": "./syntaxes/cook.tmLanguage.json"
     }]
   },
   "scripts": {

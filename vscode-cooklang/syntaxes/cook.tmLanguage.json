@@ -1,0 +1,22 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "cook",
+  "scopeName": "source.cook",
+  "patterns": [
+    {
+      "include": "#ingredient-template"
+    }
+  ],
+  "repository": {
+    "ingredient-template": {
+      "begin": "@",
+      "end": "{",
+      "patterns": [
+        {
+          "match": "\\w+",
+          "name": "variable.name"
+        }
+      ]
+    }
+  }
+}
