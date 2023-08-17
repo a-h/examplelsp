@@ -65,10 +65,7 @@ func main() {
 			return
 		}
 
-		doc, err := cooklang.ParseString(fileURIToContents[params.TextDocument.URI])
-		if err != nil {
-			return []messages.CompletionItem{}, nil
-		}
+		doc, _ := cooklang.ParseString(fileURIToContents[params.TextDocument.URI])
 		var r []messages.CompletionItem
 		for _, step := range doc.Steps {
 			for _, ingredient := range step.Ingredients {
